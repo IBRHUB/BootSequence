@@ -1,0 +1,14 @@
+# .NET / Visual Studio build outputs
+**/bin/
+**/obj/
+.vs/
+TestResults/
+*.user
+*.suo
+*.nupkg
+*.snupkg
+
+# Local diagnostic and publish artifacts
+artifacts/
+publish/
+/test
