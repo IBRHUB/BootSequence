@@ -28,7 +28,7 @@ public sealed partial class MainWindow : Window
         Title = "BootSequence";
         nint hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         Microsoft.UI.WindowId windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
-        AppWindow.GetFromWindowId(windowId).Resize(new SizeInt32(480, 420));
+        AppWindow.GetFromWindowId(windowId).Resize(new SizeInt32(500, 460));
 
         try
         {
@@ -53,13 +53,12 @@ public sealed partial class MainWindow : Window
             Populate(entries);
             if (recovered)
             {
-                ShowStatus("Canceled restart recovered; the pending boot change was removed",
+                ShowStatus("Restart canceled", "Pending change removed.",
                     InfoBarSeverity.Success);
             }
             else if (_shutdownMonitor is null)
             {
-                ShowStatus("Restart safety monitor is unavailable. Restart is disabled.",
-                    InfoBarSeverity.Error);
+                ShowDiagnostic("shutdown.monitor-install");
             }
         }
         catch (Exception exception)
@@ -67,38 +66,51 @@ public sealed partial class MainWindow : Window
             _logger.Error("startup.read-boot-state", exception);
             LoadingRing.IsActive = false;
             LoadingRing.Visibility = Visibility.Collapsed;
-            ShowStatus("Can't safely read or recover the boot state. See %LOCALAPPDATA%\\BootSequence\\logs\\BootSequence.log.",
-                InfoBarSeverity.Error);
+            ShowDiagnostic("startup.read-boot-state");
         }
     }
 
     private void Populate(IReadOnlyList<BootEntry> entries)
     {
-        BootList.Items.Clear();
+        BootList.Children.Clear();
         int available = 0;
 
         foreach (BootEntry entry in entries)
         {
-            var text = new StackPanel { Spacing = 3 };
+            var text = new StackPanel
+            {
+                Spacing = 3,
+                VerticalAlignment = VerticalAlignment.Center
+            };
             text.Children.Add(new TextBlock
             {
                 Text = entry.Name,
                 Style = (Style)Application.Current.Resources["BodyStrongTextBlockStyle"]
             });
-            string suffix = EntrySuffix(entry);
             text.Children.Add(new TextBlock
             {
-                Text = entry.Disk + suffix,
+                Text = EntryDetails(entry),
                 Opacity = 0.7,
                 FontSize = 12
             });
+
+            var content = new Grid();
+            content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            content.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            content.Children.Add(text);
+
+            FrameworkElement state = EntryState(entry);
+            Grid.SetColumn(state, 1);
+            content.Children.Add(state);
 
             var button = new Button
             {
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 HorizontalContentAlignment = HorizontalAlignment.Stretch,
-                Padding = new Thickness(16, 12, 16, 12),
-                Content = text,
+                MinHeight = 64,
+                Padding = new Thickness(16, 10, 14, 10),
+                CornerRadius = new CornerRadius(8),
+                Content = content,
                 IsEnabled = _shutdownMonitor is not null && !entry.IsCurrent && entry.IsSelectable
             };
             if (button.IsEnabled)
@@ -106,13 +118,14 @@ public sealed partial class MainWindow : Window
                 available++;
                 button.Click += async (_, _) => await ConfirmAndRestartAsync(entry);
             }
-            BootList.Items.Add(button);
+            BootList.Children.Add(button);
         }
 
         LoadingRing.IsActive = false;
         LoadingRing.Visibility = Visibility.Collapsed;
         BootList.Visibility = Visibility.Visible;
-        if (available == 0) ShowStatus("No other Windows", InfoBarSeverity.Informational);
+        if (available == 0)
+            ShowStatus("No Windows available", "Check the listed entries.", InfoBarSeverity.Informational);
     }
 
     private async Task ConfirmAndRestartAsync(BootEntry entry)
@@ -136,14 +149,14 @@ public sealed partial class MainWindow : Window
         SetBusy(false);
 
         var content = new StackPanel { Spacing = 8 };
-        content.Children.Add(new TextBlock { Text = "Save your work first" });
+        content.Children.Add(new TextBlock { Text = "Save your work." });
         if (assessment.ShouldWarn)
         {
             content.Children.Add(new TextBlock
             {
                 Text = assessment.HasUnknown
-                    ? "BitLocker status couldn't be verified. Keep your recovery key ready."
-                    : "Keep your BitLocker recovery key ready.",
+                    ? "BitLocker unknown. Keep the recovery key ready."
+                    : "Keep the BitLocker recovery key ready.",
                 TextWrapping = TextWrapping.Wrap
             });
         }
@@ -214,21 +227,28 @@ public sealed partial class MainWindow : Window
 
         if (restartStarted) return;
         SetBusy(false);
-        ShowStatus(ResultMessage(result), InfoBarSeverity.Error);
+        ShowResult(result);
     }
 
     private void SetBusy(bool busy)
     {
-        BootList.IsEnabled = !busy;
+        BootList.IsHitTestVisible = !busy;
         LoadingRing.IsActive = busy;
         LoadingRing.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private void ShowStatus(string message, InfoBarSeverity severity)
+    private void ShowStatus(string title, string message, InfoBarSeverity severity)
     {
+        StatusBar.Title = title;
         StatusBar.Message = message;
         StatusBar.Severity = severity;
         StatusBar.IsOpen = true;
+    }
+
+    private void ShowDiagnostic(string stage)
+    {
+        DiagnosticIssue issue = AppDiagnostics.Logger.DescribeLatest(stage);
+        ShowStatus(issue.Title, issue.Message, InfoBarSeverity.Error);
     }
 
     private static string CurrentDrive()
@@ -238,15 +258,27 @@ public sealed partial class MainWindow : Window
         return root.Length >= 2 ? root[..2].ToUpperInvariant() : string.Empty;
     }
 
-    private static string ResultMessage(PrepareResult result) => result switch
+    private void ShowResult(PrepareResult result)
     {
-        PrepareResult.PendingExists => "Restart already planned",
-        PrepareResult.PersistentSequence => "Persistent boot sequence detected",
-        PrepareResult.InvalidTarget => "Windows entry unavailable",
-        PrepareResult.WriteFailed => "Can't set next Windows. See %LOCALAPPDATA%\\BootSequence\\logs\\BootSequence.log.",
-        PrepareResult.VerificationFailed => "Boot change not verified. See %LOCALAPPDATA%\\BootSequence\\logs\\BootSequence.log.",
-        _ => "Can't restart. See %LOCALAPPDATA%\\BootSequence\\logs\\BootSequence.log."
-    };
+        switch (result)
+        {
+            case PrepareResult.PendingExists:
+                ShowStatus("Restart already planned", "Restart Windows first.", InfoBarSeverity.Warning);
+                break;
+            case PrepareResult.PersistentSequence:
+                ShowStatus("Boot order is locked", "Remove the existing sequence.", InfoBarSeverity.Error);
+                break;
+            case PrepareResult.InvalidTarget:
+                ShowStatus("Windows unavailable", "Choose another entry.", InfoBarSeverity.Error);
+                break;
+            case PrepareResult.VerificationFailed:
+                ShowDiagnostic("bcd.verify-result");
+                break;
+            default:
+                ShowDiagnostic("bcd.prepare-sequence");
+                break;
+        }
+    }
 
     private bool RecoverPendingRestart()
     {
@@ -279,14 +311,13 @@ public sealed partial class MainWindow : Window
         try
         {
             await Task.Run(() => RecoverOwnedSequence(targetId, "shutdown.canceled"));
-            ShowStatus("Restart was canceled; the pending boot change was removed",
+            ShowStatus("Restart canceled", "Pending change removed.",
                 InfoBarSeverity.Warning);
         }
         catch (Exception exception)
         {
             _logger.Error("shutdown.canceled-cleanup", exception);
-            ShowStatus("Restart was canceled, but cleanup could not be verified. See %LOCALAPPDATA%\\BootSequence\\logs\\BootSequence.log.",
-                InfoBarSeverity.Error);
+            ShowDiagnostic("shutdown.canceled-cleanup");
         }
         finally
         {
@@ -294,16 +325,39 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private static string EntrySuffix(BootEntry entry)
+    private static string EntryDetails(BootEntry entry)
     {
-        if (entry.IsCurrent) return "  Current";
-        return entry.Availability switch
+        string state = entry.Availability switch
         {
             BootEntryAvailability.Available => string.Empty,
-            BootEntryAvailability.UnresolvedDevice => "  Device unavailable",
-            BootEntryAvailability.LoaderMissing => "  Loader missing",
-            BootEntryAvailability.InspectionFailed => "  Loader unverified",
-            _ => "  Unavailable"
+            BootEntryAvailability.UnresolvedDevice => " · Drive missing",
+            BootEntryAvailability.LoaderMissing => " · Loader missing",
+            BootEntryAvailability.InspectionFailed => " · Not verified",
+            _ => " · Unavailable"
+        };
+        return entry.Disk + state;
+    }
+
+    private static FrameworkElement EntryState(BootEntry entry)
+    {
+        if (!entry.IsCurrent && entry.IsSelectable)
+        {
+            return new FontIcon
+            {
+                Glyph = "\uE76C",
+                FontSize = 12,
+                Opacity = 0.65,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+        }
+
+        return new TextBlock
+        {
+            Text = entry.IsCurrent ? "Current" : "Unavailable",
+            FontSize = 12,
+            Opacity = 0.65,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(12, 0, 0, 0)
         };
     }
 }
