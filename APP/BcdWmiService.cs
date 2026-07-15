@@ -8,6 +8,7 @@ namespace BootSequence.SystemServices;
 public sealed class BcdWmiService : IBootConfigurationService
 {
     private const string MutationMutexName = @"Global\BootSequence.BcdMutation";
+    private const int StatusNotFoundHResult = unchecked((int)0xD0000225);
     private const uint WindowsOsLoaderType = 0x10200003;
     private const uint ApplicationDevice = 0x11000001;
     private const uint ApplicationPath = 0x12000002;
@@ -300,13 +301,22 @@ public sealed class BcdWmiService : IBootConfigurationService
 
         public ManagementBaseObject? TryGetElement(string objectPath, uint type)
         {
-            using var owner = new ManagementObject(_scope, new ManagementPath(objectPath), null);
-            using ManagementBaseObject input = owner.GetMethodParameters("GetElement");
-            input["Type"] = type;
-            using ManagementBaseObject output = owner.InvokeMethod("GetElement", input, null)
-                ?? throw new ManagementException("BCD GetElement returned no result");
-            if (!MethodSucceeded(output)) return null;
-            return output["Element"] as ManagementBaseObject;
+            try
+            {
+                using var owner = new ManagementObject(_scope, new ManagementPath(objectPath), null);
+                using ManagementBaseObject input = owner.GetMethodParameters("GetElement");
+                input["Type"] = type;
+                using ManagementBaseObject output = owner.InvokeMethod("GetElement", input, null)
+                    ?? throw new ManagementException("BCD GetElement returned no result");
+                if (!MethodSucceeded(output)) return null;
+                return output["Element"] as ManagementBaseObject;
+            }
+            catch (COMException exception) when (exception.HResult == StatusNotFoundHResult)
+            {
+                // The BCD provider reports an absent optional element as
+                // HRESULT_FROM_NT(STATUS_NOT_FOUND) on some Windows builds.
+                return null;
+            }
         }
 
         public string ReadStringElement(ManagementBaseObject owner, uint type)
