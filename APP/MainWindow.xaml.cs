@@ -17,7 +17,9 @@ public sealed partial class MainWindow : Window
     private readonly BcdEditService _bcdEdit;
     private readonly PendingRestartJournal _journal;
     private readonly ShutdownMonitor? _shutdownMonitor;
+    private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _statusTimer;
     private string? _pendingBootTarget;
+    private IReadOnlyList<BootEntry> _entries = Array.Empty<BootEntry>();
 
     public MainWindow()
     {
@@ -28,11 +30,18 @@ public sealed partial class MainWindow : Window
         _bcdEdit = new BcdEditService();
         _journal = new PendingRestartJournal();
         InitializeComponent();
+        _statusTimer = DispatcherQueue.CreateTimer();
+        _statusTimer.Interval = TimeSpan.FromSeconds(5);
+        _statusTimer.IsRepeating = false;
+        _statusTimer.Tick += (_, _) => StatusBar.IsOpen = false;
         UpdateTimingText();
         Title = "BootSequence";
         nint hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         Microsoft.UI.WindowId windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
-        AppWindow.GetFromWindowId(windowId).Resize(new SizeInt32(500, 520));
+        AppWindow appWindow = AppWindow.GetFromWindowId(windowId);
+        string iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "BootSequence.ico");
+        if (File.Exists(iconPath)) appWindow.SetIcon(iconPath);
+        appWindow.Resize(new SizeInt32(500, 520));
 
         try
         {
@@ -44,7 +53,11 @@ public sealed partial class MainWindow : Window
             _logger.Error("shutdown.monitor-install", exception);
         }
 
-        Closed += (_, _) => _shutdownMonitor?.Dispose();
+        Closed += (_, _) =>
+        {
+            _statusTimer.Stop();
+            _shutdownMonitor?.Dispose();
+        };
         _ = LoadEntriesAsync();
     }
 
@@ -77,6 +90,9 @@ public sealed partial class MainWindow : Window
     private void Populate(IReadOnlyList<BootEntry> entries)
     {
         BootList.Children.Clear();
+        _entries = entries;
+        EditNameButton.IsEnabled = entries.Count > 0;
+        if (entries.Count == 0) EditNameButton.IsChecked = false;
         int available = 0;
 
         foreach (BootEntry entry in entries)
@@ -274,8 +290,102 @@ public sealed partial class MainWindow : Window
     {
         BootMethodBox.IsEnabled = !busy;
         BootList.IsHitTestVisible = !busy;
+        EditNameButton.IsEnabled = !busy && _entries.Count > 0;
+        RenameTargetBox.IsEnabled = !busy;
+        WindowsNameBox.IsEnabled = !busy;
+        RenameSaveButton.IsEnabled = !busy;
         LoadingRing.IsActive = busy;
         LoadingRing.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void EditNameButton_Checked(object sender, RoutedEventArgs args)
+    {
+        if (_entries.Count == 0)
+        {
+            EditNameButton.IsChecked = false;
+            return;
+        }
+
+        PopulateRenameTargets();
+        RenamePanel.Visibility = Visibility.Visible;
+    }
+
+    private void EditNameButton_Unchecked(object sender, RoutedEventArgs args)
+    {
+        RenamePanel.Visibility = Visibility.Collapsed;
+    }
+
+    private void PopulateRenameTargets()
+    {
+        RenameTargetBox.Items.Clear();
+        int selectedIndex = 0;
+        for (int index = 0; index < _entries.Count; index++)
+        {
+            BootEntry entry = _entries[index];
+            RenameTargetBox.Items.Add(new ComboBoxItem
+            {
+                Content = entry.Name,
+                Tag = entry
+            });
+            if (entry.IsCurrent) selectedIndex = index;
+        }
+
+        RenameTargetBox.SelectedIndex = selectedIndex;
+    }
+
+    private void RenameTargetBox_SelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        BootEntry? entry = SelectedRenameEntry();
+        if (entry is null) return;
+        WindowsNameBox.Text = entry.Name;
+        WindowsNameBox.Focus(FocusState.Programmatic);
+        WindowsNameBox.SelectAll();
+    }
+
+    private BootEntry? SelectedRenameEntry() =>
+        (RenameTargetBox.SelectedItem as ComboBoxItem)?.Tag as BootEntry;
+
+    private async void RenameSaveButton_Click(object sender, RoutedEventArgs args)
+    {
+        BootEntry? target = SelectedRenameEntry();
+        if (target is null)
+        {
+            ShowStatus("Choose Windows", "Select an entry", InfoBarSeverity.Warning);
+            return;
+        }
+
+        string description = WindowsNameBox.Text.Trim();
+        if (string.IsNullOrWhiteSpace(description))
+        {
+            ShowStatus("Name required", "Enter a Windows name", InfoBarSeverity.Warning);
+            return;
+        }
+
+        if (string.Equals(description, target.Name, StringComparison.Ordinal))
+        {
+            EditNameButton.IsChecked = false;
+            return;
+        }
+
+        SetBusy(true);
+        StatusBar.IsOpen = false;
+        try
+        {
+            await Task.Run(() => _bcdEdit.Rename(target.Id, description));
+            IReadOnlyList<BootEntry> entries = await Task.Run(_boot.ReadEntries);
+            Populate(entries);
+            EditNameButton.IsChecked = false;
+            ShowStatus("Windows renamed", description, InfoBarSeverity.Success);
+        }
+        catch (Exception exception)
+        {
+            _logger.Error("bcdedit.rename", exception);
+            ShowDiagnostic("bcdedit.rename");
+        }
+        finally
+        {
+            SetBusy(false);
+        }
     }
 
     private void AboutButton_Click(object sender, RoutedEventArgs args)
@@ -294,10 +404,12 @@ public sealed partial class MainWindow : Window
 
     private void ShowStatus(string title, string message, InfoBarSeverity severity)
     {
+        _statusTimer.Stop();
         StatusBar.Title = title;
         StatusBar.Message = message;
         StatusBar.Severity = severity;
         StatusBar.IsOpen = true;
+        _statusTimer.Start();
     }
 
     private void ShowDiagnostic(string stage)

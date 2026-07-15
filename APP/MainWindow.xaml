@@ -16,14 +16,30 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <StackPanel Spacing="4">
-                <TextBlock Text="Choose Windows" Style="{ThemeResource TitleTextBlockStyle}" />
-                <TextBlock Text="Select the next startup"
-                           Style="{ThemeResource CaptionTextBlockStyle}"
-                           Opacity="0.72" />
-            </StackPanel>
+            <Grid>
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Choose Windows" Style="{ThemeResource TitleTextBlockStyle}" />
+                    <TextBlock Text="Select the next startup"
+                               Style="{ThemeResource CaptionTextBlockStyle}"
+                               Opacity="0.72" />
+                </StackPanel>
+                <ToggleButton x:Name="EditNameButton"
+                              HorizontalAlignment="Right"
+                              VerticalAlignment="Top"
+                              Width="36"
+                              Height="36"
+                              Padding="0"
+                              IsEnabled="False"
+                              Checked="EditNameButton_Checked"
+                              Unchecked="EditNameButton_Unchecked"
+                              AutomationProperties.Name="Edit Windows name"
+                              ToolTipService.ToolTip="Edit Windows name">
+                    <FontIcon Glyph="&#xE70F;" FontSize="14" />
+                </ToggleButton>
+            </Grid>
 
             <StackPanel Grid.Row="1" Spacing="4">
                 <ComboBox x:Name="BootMethodBox"
@@ -50,8 +66,31 @@
                            Visibility="Collapsed" />
             </StackPanel>
 
+            <Grid x:Name="RenamePanel"
+                  Grid.Row="2"
+                  ColumnSpacing="8"
+                  Visibility="Collapsed">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="5*" />
+                    <ColumnDefinition Width="6*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <ComboBox x:Name="RenameTargetBox"
+                          PlaceholderText="Choose Windows"
+                          HorizontalAlignment="Stretch"
+                          SelectionChanged="RenameTargetBox_SelectionChanged" />
+                <TextBox x:Name="WindowsNameBox"
+                         Grid.Column="1"
+                         MaxLength="80"
+                         PlaceholderText="Windows name" />
+                <Button x:Name="RenameSaveButton"
+                        Grid.Column="2"
+                        Content="Save"
+                        Click="RenameSaveButton_Click" />
+            </Grid>
+
             <InfoBar x:Name="StatusBar"
-                     Grid.Row="2"
+                     Grid.Row="4"
                      IsOpen="False"
                      IsClosable="False" />
 
@@ -92,6 +131,15 @@
                           VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Disabled">
                 <StackPanel Spacing="20">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Image Source="ms-appx:///Assets/BootSequence.png"
+                               Width="56"
+                               Height="56" />
+                        <TextBlock Text="BootSequence"
+                                   Style="{ThemeResource SubtitleTextBlockStyle}"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+
                     <StackPanel Spacing="4">
                         <TextBlock Text="Developer"
                                    Style="{ThemeResource CaptionTextBlockStyle}"

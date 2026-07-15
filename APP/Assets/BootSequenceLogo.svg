@@ -1,0 +1,9 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <mask id="desktopSync" maskUnits="userSpaceOnUse" x="32" y="32" width="192" height="192" style="mask-type:alpha">
+      <image href="FluentDesktopSync.svg" x="32" y="32" width="192" height="192" />
+    </mask>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="#000000" />
+  <rect x="32" y="32" width="192" height="192" fill="white" mask="url(#desktopSync)" />
+</svg>

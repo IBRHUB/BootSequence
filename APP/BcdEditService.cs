@@ -27,6 +27,18 @@ public sealed class BcdEditService
         }
     }
 
+    public void Rename(string targetId, string description)
+    {
+        string id = NormalizeId(targetId);
+        string value = description.Trim();
+        if (string.IsNullOrWhiteSpace(value))
+            throw new InvalidDataException("The Windows name is empty");
+        if (value.Any(char.IsControl))
+            throw new InvalidDataException("The Windows name contains control characters");
+
+        Run("bcdedit.rename", "/set", id, "description", value);
+    }
+
     private static string NormalizeId(string value)
     {
         string candidate = value.Trim().Trim('{', '}');
