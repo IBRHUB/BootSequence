@@ -13,7 +13,7 @@
     <WindowsPackageType>None</WindowsPackageType>
     <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
     <EnableMsixTooling>false</EnableMsixTooling>
-    <SelfContained>true</SelfContained>
+    <SelfContained>false</SelfContained>
     <PublishSingleFile>false</PublishSingleFile>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -21,8 +21,6 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" />
-    <PackageReference Include="Microsoft.WindowsAppSDK.DWrite" />
-    <PackageReference Include="Microsoft.WindowsAppSDK.Runtime" />
     <PackageReference Include="System.Management" />
   </ItemGroup>
   <ItemGroup>

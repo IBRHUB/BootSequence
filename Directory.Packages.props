@@ -4,8 +4,6 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageVersion Include="Microsoft.WindowsAppSDK.WinUI" Version="1.8.260505002" />
-    <PackageVersion Include="Microsoft.WindowsAppSDK.DWrite" Version="1.8.25122902" />
-    <PackageVersion Include="Microsoft.WindowsAppSDK.Runtime" Version="1.8.260508005" />
     <PackageVersion Include="System.Management" Version="10.0.2" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageVersion Include="xunit" Version="2.9.3" />

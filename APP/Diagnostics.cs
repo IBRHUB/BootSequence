@@ -15,6 +15,11 @@ public sealed class FileDiagnosticLogger : IDiagnosticLogger
         "logs",
         "BootSequence.log");
 
+    private string TimingPath { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "BootSequence",
+        "last-bcd-timing.txt");
+
     public void Error(string stage, Exception exception)
     {
         try
@@ -73,6 +78,46 @@ public sealed class FileDiagnosticLogger : IDiagnosticLogger
         return DiagnosticIssueCatalog.Describe(context);
     }
 
+    public void RecordTiming(string method, long milliseconds)
+    {
+        try
+        {
+            lock (Sync)
+            {
+                string? directory = Path.GetDirectoryName(TimingPath);
+                if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+                string safeMethod = new(method.Where(character =>
+                    char.IsLetterOrDigit(character) || character is ' ' or '-' or '/' or '.').ToArray());
+                File.WriteAllText(TimingPath, $"{safeMethod}|{Math.Max(0, milliseconds)}");
+            }
+        }
+        catch
+        {
+            // Timing is diagnostic only.
+        }
+    }
+
+    public DiagnosticTiming? ReadTiming()
+    {
+        try
+        {
+            lock (Sync)
+            {
+                if (!File.Exists(TimingPath)) return null;
+                string[] parts = File.ReadAllText(TimingPath).Split('|', 2);
+                bool knownMethod = parts.Length == 2 &&
+                    parts[0] is "WMI" or "/bootsequence" or "/set bootsequence";
+                return knownMethod && long.TryParse(parts[1], out long milliseconds)
+                    ? new DiagnosticTiming(parts[0], milliseconds)
+                    : null;
+            }
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private void RotateIfNeeded()
     {
         if (!File.Exists(LogPath) || new FileInfo(LogPath).Length < MaximumLogBytes) return;
@@ -81,6 +126,7 @@ public sealed class FileDiagnosticLogger : IDiagnosticLogger
 }
 
 public sealed record DiagnosticIssue(string Title, string Message);
+public sealed record DiagnosticTiming(string Method, long Milliseconds);
 
 internal static class DiagnosticIssueCatalog
 {
@@ -90,36 +136,36 @@ internal static class DiagnosticIssueCatalog
 
         // Ten concise, actionable problems, selected from the latest log record.
         if (Has(value, "unauthorizedaccessexception", "win32=5", "0x80070005", "access is denied", "privilege"))
-            return new("Admin access needed", "Reopen as administrator.");
+            return new("Admin access needed", "Reopen as administrator");
 
         if (Has(value, "bitlocker"))
-            return new("BitLocker status unknown", "Keep the recovery key ready.");
+            return new("Drive protection unknown", "Keep the recovery key ready");
 
         if (Has(value, "loader.inspect", "filenotfoundexception", "directorynotfoundexception"))
-            return new("Windows entry is incomplete", "Repair its boot loader.");
+            return new("Windows unavailable", "Choose another entry");
 
         if (Has(value, "bcd.verify", "verificationfailed", "not verified", "verified"))
-            return new("Boot change not verified", "No boot change was kept.");
+            return new("Boot change not verified", "No boot change was kept");
 
         if (Has(value, "bcd.rollback", "recover-pending", "canceled-cleanup", "shutdown.canceled"))
-            return new("Cleanup not confirmed", "Check the boot order first.");
+            return new("Cleanup not confirmed", "Check the boot order first");
 
         if (Has(value, "monitor-install", "arm-recovery"))
-            return new("Restart safety unavailable", "Restart is disabled.");
+            return new("Restart safety unavailable", "Restart is disabled");
 
         if (Has(value, "restart.request", "restart.rejected", "exitwindowsex", "rejected the restart"))
-            return new("Restart was blocked", "Close apps and try again.");
+            return new("Restart was blocked", "Close apps and try again");
 
-        if (Has(value, "bcd.prepare", "bcd.write", "setobjectlistelement", "writefailed"))
-            return new("Can't save boot choice", "Check BCD permissions.");
+        if (Has(value, "bcd.prepare", "bcd.write", "bcdedit.", "setobjectlistelement", "writefailed"))
+            return new("Can't save boot choice", "Try again");
 
         if (Has(value, "startup.read", "bcd.validate", "read-boot-state", "open the system bcd"))
-            return new("Can't read boot options", "Check the BCD configuration.");
+            return new("Can't read boot options", "Try again");
 
         if (Has(value, "managementexception", "comexception", "wmi=", "provider"))
-            return new("Boot service unavailable", "Restart Windows and try again.");
+            return new("Boot options unavailable", "Restart Windows and try again");
 
-        return new("Unexpected error", "Try again.");
+        return new("Unexpected error", "Try again");
     }
 
     private static bool Has(string value, params string[] patterns) =>

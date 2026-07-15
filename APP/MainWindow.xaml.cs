@@ -1,5 +1,6 @@
 using BootSequence.Core;
 using BootSequence.SystemServices;
+using System.Diagnostics;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Windowing;
@@ -13,6 +14,7 @@ public sealed partial class MainWindow : Window
     private readonly IBootConfigurationService _boot;
     private readonly IBitLockerService _bitLocker;
     private readonly IRestartService _restart;
+    private readonly BcdEditService _bcdEdit;
     private readonly PendingRestartJournal _journal;
     private readonly ShutdownMonitor? _shutdownMonitor;
     private string? _pendingBootTarget;
@@ -23,12 +25,14 @@ public sealed partial class MainWindow : Window
         _boot = new BcdWmiService(_logger);
         _bitLocker = new BitLockerService();
         _restart = new RestartService();
+        _bcdEdit = new BcdEditService();
         _journal = new PendingRestartJournal();
         InitializeComponent();
+        UpdateTimingText();
         Title = "BootSequence";
         nint hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         Microsoft.UI.WindowId windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
-        AppWindow.GetFromWindowId(windowId).Resize(new SizeInt32(500, 460));
+        AppWindow.GetFromWindowId(windowId).Resize(new SizeInt32(500, 520));
 
         try
         {
@@ -53,7 +57,7 @@ public sealed partial class MainWindow : Window
             Populate(entries);
             if (recovered)
             {
-                ShowStatus("Restart canceled", "Pending change removed.",
+                ShowStatus("Restart canceled", "Pending change removed",
                     InfoBarSeverity.Success);
             }
             else if (_shutdownMonitor is null)
@@ -125,11 +129,12 @@ public sealed partial class MainWindow : Window
         LoadingRing.Visibility = Visibility.Collapsed;
         BootList.Visibility = Visibility.Visible;
         if (available == 0)
-            ShowStatus("No Windows available", "Check the listed entries.", InfoBarSeverity.Informational);
+            ShowStatus("No Windows available", "Check the listed entries", InfoBarSeverity.Informational);
     }
 
     private async Task ConfirmAndRestartAsync(BootEntry entry)
     {
+        BootSelectionMethod method = SelectedMethod();
         SetBusy(true);
         BitLockerAssessment assessment;
         try
@@ -149,18 +154,25 @@ public sealed partial class MainWindow : Window
         SetBusy(false);
 
         var content = new StackPanel { Spacing = 8 };
-        content.Children.Add(new TextBlock { Text = "Save your work." });
+        content.Children.Add(new TextBlock { Text = "Save your work" });
         if (assessment.ShouldWarn)
         {
             content.Children.Add(new TextBlock
             {
                 Text = assessment.HasUnknown
-                    ? "BitLocker unknown. Keep the recovery key ready."
-                    : "Keep the BitLocker recovery key ready.",
+                    ? "Drive protection unknown — Keep the recovery key ready"
+                    : "Keep the recovery key ready",
                 TextWrapping = TextWrapping.Wrap
             });
         }
-
+        if (method == BootSelectionMethod.BcdEditRawBootSequence)
+        {
+            content.Children.Add(new TextBlock
+            {
+                Text = "Experimental method",
+                TextWrapping = TextWrapping.Wrap
+            });
+        }
         var dialog = new ContentDialog
         {
             XamlRoot = Content.XamlRoot,
@@ -181,7 +193,10 @@ public sealed partial class MainWindow : Window
             (result, restartStarted) = await Task.Run(() =>
             {
                 var coordinator = new BootCoordinator(_boot, _logger);
-                PrepareResult prepared = coordinator.Prepare(entry.Id);
+                var timer = Stopwatch.StartNew();
+                PrepareResult prepared = Prepare(entry, method, coordinator);
+                timer.Stop();
+                AppDiagnostics.Logger.RecordTiming(MethodName(method), timer.ElapsedMilliseconds);
                 if (prepared != PrepareResult.Ready)
                 {
                     return (prepared, false);
@@ -190,7 +205,6 @@ public sealed partial class MainWindow : Window
                 try
                 {
                     _journal.Arm(entry.Id);
-                    Volatile.Write(ref _pendingBootTarget, entry.Id);
                 }
                 catch (Exception exception)
                 {
@@ -198,6 +212,8 @@ public sealed partial class MainWindow : Window
                     coordinator.RollBackIfOwned(entry.Id);
                     return (PrepareResult.WriteFailed, false);
                 }
+
+                Volatile.Write(ref _pendingBootTarget, entry.Id);
 
                 try
                 {
@@ -227,14 +243,53 @@ public sealed partial class MainWindow : Window
 
         if (restartStarted) return;
         SetBusy(false);
+        UpdateTimingText();
         ShowResult(result);
+    }
+
+    private PrepareResult Prepare(
+        BootEntry entry,
+        BootSelectionMethod method,
+        BootCoordinator coordinator)
+    {
+        if (method == BootSelectionMethod.CurrentWmi)
+            return coordinator.Prepare(entry.Id);
+
+        if (entry.IsCurrent || !entry.IsSelectable)
+            return PrepareResult.InvalidTarget;
+
+        try
+        {
+            _bcdEdit.Apply(method, entry.Id);
+            return PrepareResult.Ready;
+        }
+        catch (Exception exception)
+        {
+            _logger.Error(MethodStage(method), exception);
+            return PrepareResult.WriteFailed;
+        }
     }
 
     private void SetBusy(bool busy)
     {
+        BootMethodBox.IsEnabled = !busy;
         BootList.IsHitTestVisible = !busy;
         LoadingRing.IsActive = busy;
         LoadingRing.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void AboutButton_Click(object sender, RoutedEventArgs args)
+    {
+        MainPage.Visibility = Visibility.Collapsed;
+        AboutPage.Visibility = Visibility.Visible;
+        AboutButton.IsEnabled = false;
+    }
+
+    private void BackButton_Click(object sender, RoutedEventArgs args)
+    {
+        AboutPage.Visibility = Visibility.Collapsed;
+        MainPage.Visibility = Visibility.Visible;
+        AboutButton.IsEnabled = true;
     }
 
     private void ShowStatus(string title, string message, InfoBarSeverity severity)
@@ -251,6 +306,32 @@ public sealed partial class MainWindow : Window
         ShowStatus(issue.Title, issue.Message, InfoBarSeverity.Error);
     }
 
+    private void UpdateTimingText()
+    {
+        DiagnosticTiming? timing = AppDiagnostics.Logger.ReadTiming();
+        if (timing is null) return;
+        LastTimingText.Text = $"Last startup {timing.Milliseconds} ms";
+        LastTimingText.Visibility = Visibility.Visible;
+    }
+
+    private BootSelectionMethod SelectedMethod() =>
+        (BootSelectionMethod)Math.Clamp(BootMethodBox.SelectedIndex, 0, 2);
+
+    private static string MethodName(BootSelectionMethod method) => method switch
+    {
+        BootSelectionMethod.BcdEditBootSequence => "/bootsequence",
+        BootSelectionMethod.BcdEditRawBootSequence => "/set bootsequence",
+        BootSelectionMethod.CurrentWmi => "WMI",
+        _ => "Unknown"
+    };
+
+    private static string MethodStage(BootSelectionMethod method) => method switch
+    {
+        BootSelectionMethod.BcdEditBootSequence => "bcdedit.bootsequence",
+        BootSelectionMethod.BcdEditRawBootSequence => "bcdedit.raw-bootsequence",
+        _ => "bcd.prepare-sequence"
+    };
+
     private static string CurrentDrive()
     {
         string windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
@@ -263,13 +344,13 @@ public sealed partial class MainWindow : Window
         switch (result)
         {
             case PrepareResult.PendingExists:
-                ShowStatus("Restart already planned", "Restart Windows first.", InfoBarSeverity.Warning);
+                ShowStatus("Restart already planned", "Restart Windows first", InfoBarSeverity.Warning);
                 break;
             case PrepareResult.PersistentSequence:
-                ShowStatus("Boot order is locked", "Remove the existing sequence.", InfoBarSeverity.Error);
+                ShowStatus("Boot order is locked", "Remove the existing sequence", InfoBarSeverity.Error);
                 break;
             case PrepareResult.InvalidTarget:
-                ShowStatus("Windows unavailable", "Choose another entry.", InfoBarSeverity.Error);
+                ShowStatus("Windows unavailable", "Choose another entry", InfoBarSeverity.Error);
                 break;
             case PrepareResult.VerificationFailed:
                 ShowDiagnostic("bcd.verify-result");
@@ -311,7 +392,7 @@ public sealed partial class MainWindow : Window
         try
         {
             await Task.Run(() => RecoverOwnedSequence(targetId, "shutdown.canceled"));
-            ShowStatus("Restart canceled", "Pending change removed.",
+            ShowStatus("Restart canceled", "Pending change removed",
                 InfoBarSeverity.Warning);
         }
         catch (Exception exception)
@@ -327,15 +408,9 @@ public sealed partial class MainWindow : Window
 
     private static string EntryDetails(BootEntry entry)
     {
-        string state = entry.Availability switch
-        {
-            BootEntryAvailability.Available => string.Empty,
-            BootEntryAvailability.UnresolvedDevice => " · Drive missing",
-            BootEntryAvailability.LoaderMissing => " · Loader missing",
-            BootEntryAvailability.InspectionFailed => " · Not verified",
-            _ => " · Unavailable"
-        };
-        return entry.Disk + state;
+        return entry.Availability == BootEntryAvailability.Available
+            ? entry.Disk
+            : $"{entry.Disk}  Unavailable";
     }
 
     private static FrameworkElement EntryState(BootEntry entry)
