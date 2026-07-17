@@ -176,7 +176,7 @@ public sealed partial class MainWindow : Window
             content.Children.Add(new TextBlock
             {
                 Text = assessment.HasUnknown
-                    ? "Drive protection unknown — Keep the recovery key ready"
+                    ? "Drive protection unknown Keep the recovery key ready"
                     : "Keep the recovery key ready",
                 TextWrapping = TextWrapping.Wrap
             });
